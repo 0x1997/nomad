@@ -60,6 +60,9 @@ type DockerDriverConfig struct {
 	LabelsRaw        []map[string]string `mapstructure:"labels"`             //
 	Labels           map[string]string   `mapstructure:"-"`                  // Labels to set when the container starts up
 	Auth             []DockerDriverAuth  `mapstructure:"auth"`               // Authentication credentials for a private Docker registry
+	ReadonlyRootfs   bool                `mapstructure:"read_only"`          // Flag to mount the container's root filesystem as read only
+	Binds            []string            `mapstructure:"binds"`              // Volumes to mount into the container
+	VolumesFrom      []string            `mapstructure:"volumes_from"`       // Containers from which the container mounts volumes
 }
 
 func (c *DockerDriverConfig) Validate() error {
@@ -167,19 +170,23 @@ func (d *DockerDriver) Fingerprint(cfg *config.Config, node *structs.Node) (bool
 	return true, nil
 }
 
-func (d *DockerDriver) containerBinds(alloc *allocdir.AllocDir, task *structs.Task) ([]string, error) {
+func (d *DockerDriver) containerBinds(alloc *allocdir.AllocDir, task *structs.Task,
+	driverConfig *DockerDriverConfig) ([]string, error) {
 	shared := alloc.SharedDir
 	local, ok := alloc.TaskDirs[task.Name]
 	if !ok {
 		return nil, fmt.Errorf("Failed to find task local directory: %v", task.Name)
 	}
 
-	return []string{
+	binds := []string{
 		// "z" and "Z" option is to allocate directory with SELinux label.
 		fmt.Sprintf("%s:/%s:rw,z", shared, allocdir.SharedAllocName),
 		// capital "Z" will label with Multi-Category Security (MCS) labels
 		fmt.Sprintf("%s:/%s:rw,Z", local, allocdir.TaskLocal),
-	}, nil
+	}
+	// Bind-mount docker volumes
+	binds = append(binds, driverConfig.Binds...)
+	return binds, nil
 }
 
 // createContainer initializes a struct needed to call docker.client.CreateContainer()
@@ -193,7 +200,7 @@ func (d *DockerDriver) createContainer(ctx *ExecContext, task *structs.Task,
 		return c, fmt.Errorf("task.Resources is empty")
 	}
 
-	binds, err := d.containerBinds(ctx.AllocDir, task)
+	binds, err := d.containerBinds(ctx.AllocDir, task, driverConfig)
 	if err != nil {
 		return c, err
 	}
@@ -237,10 +244,13 @@ func (d *DockerDriver) createContainer(ctx *ExecContext, task *structs.Task,
 		//  - https://www.kernel.org/doc/Documentation/scheduler/sched-design-CFS.txt
 		CPUShares: int64(task.Resources.CPU),
 
-		// Binds are used to mount a host volume into the container. We mount a
-		// local directory for storage and a shared alloc directory that can be
-		// used to share data between different tasks in the same task group.
-		Binds: binds,
+		// Binds are used to mount a host volume into the container. Aside from
+		// specified volumes and containers, we mount a local directory for storage
+		// and a shared alloc directory that can be used to share data between
+		// different tasks in the same task group.
+		ReadonlyRootfs: driverConfig.ReadonlyRootfs,
+		Binds:          binds,
+		VolumesFrom:    driverConfig.VolumesFrom,
 		LogConfig: docker.LogConfig{
 			Type: "syslog",
 			Config: map[string]string{
