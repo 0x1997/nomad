@@ -1,4 +1,4 @@
-Nomad [![Build Status](https://travis-ci.org/hashicorp/nomad.svg)](https://travis-ci.org/hashicorp/nomad)
+Nomad [![Build Status](https://travis-ci.org/0x1997/nomad.svg)](https://travis-ci.org/0x1997/nomad)
 =========
 
 -	Website: https://www.nomadproject.io
